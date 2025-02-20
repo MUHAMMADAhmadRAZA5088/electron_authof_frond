@@ -49,9 +49,57 @@ const App = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [activeRightSection, setActiveRightSection] = useState('code');
   const navigate = useNavigate ();
+  
+  
 
   const [isMobile, setIsMobile] = useState(false);
   const [userId, setUserId] = useState(localStorage.getItem('userId'));
+  const openRequestInTab = (historyRequest) => {
+    setActiveSection('collections');
+    const existingFolder = collections.find(folder => 
+      folder.id === historyRequest.folderId || folder.name === historyRequest.folderName
+    );
+    
+    // Create the API object with isFromHistory flag
+    const newApi = {
+      id: historyRequest.apiId || `api-${Date.now()}`,
+      name: historyRequest.apiName || historyRequest.url.split('/').pop(),
+      method: historyRequest.method,
+      url: historyRequest.url,
+      headers: historyRequest.requestDetails?.headers || [],
+      queryParams: historyRequest.requestDetails?.queryParams || [],
+      body: historyRequest.requestDetails?.body || {},
+      auth: historyRequest.requestDetails?.auth || { type: 'none' },
+      settings: historyRequest.settings || {},
+      isFromHistory: true // Add this flag
+    };
+  
+    if (existingFolder) {
+      // Add the new API to existing folder without checking for duplicates
+      const updatedCollections = collections.map(folder => {
+        if (folder.id === existingFolder.id) {
+          return {
+            ...folder,
+            apis: [...folder.apis, newApi]
+          };
+        }
+        return folder;
+      });
+      
+      setCollections(updatedCollections);
+      openNewTab(existingFolder.id, newApi);
+    } else {
+      // Create new folder and add API
+      const newFolder = {
+        id: `folder-${Date.now()}`,
+        name: historyRequest.folderName || 'History Requests',
+        apis: [newApi]
+      };
+      
+      setCollections([...collections, newFolder]);
+      openNewTab(newFolder.id, newApi);
+    }
+  };
         
   useEffect(() => {
     const fetchTemplates = async () => {
@@ -150,6 +198,41 @@ const FooterButton = ({ icon: Icon, label, onClick }) => (
   };
 
 
+  const handleRename = async (id, type, newName) => {
+    try {
+      const endpoint = type === 'collection' 
+        ? `${API_BASE_URL}/collections/${id}/rename`
+        : `${API_BASE_URL}/apis/${id}/rename`;
+  
+      const response = await axios.put(endpoint, { newName });
+  
+      if (response.data.success) {
+        // Update the collections state with the new name
+        setCollections(collections.map(folder => {
+          if (type === 'collection' && folder.id === id) {
+            return { ...folder, name: newName };
+          } else if (type === 'api') {
+            return {
+              ...folder,
+              apis: folder.apis.map(api => 
+                api.id === id ? { ...api, name: newName } : api
+              )
+            };
+          }
+          return folder;
+        }));
+      }
+    } catch (error) {
+      console.error('Error renaming:', error);
+      setError('Failed to rename ' + type);
+    } finally {
+      setEditingName(null);
+      setEditingType(null);
+      setNewName('');
+    }
+  };
+  
+
   const navigationItems = [
     { id: 'collections', icon: FolderCheckIcon, label: 'Collections' },
     { id: 'environments', icon: Database, label: 'Environments' },
@@ -168,15 +251,148 @@ const FooterButton = ({ icon: Icon, label, onClick }) => (
     setIsMobileSidebarOpen(false);
   };
 
+  // Modify the rendering logic to check for isFromHistory flag
+const renderApiItem = (folder, api) => {
+  // If API is from history, render without edit/delete options
+  if (api.isFromHistory) {
+    return (
+      <></>
+    );
+  }
+
+  // Regular API with full editing capabilities
+  return (
+    <div key={api.id} className="relative ml-2 p-2 rounded-lg cursor-pointer group">
+      {editingName === api.id && editingType === 'api' ? (
+        <form 
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleRename(api.id, 'api', newName);
+          }}
+          className="flex items-center space-x-2 p-2"
+        >
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            className="flex-1 px-2 py-1 border rounded dark:bg-gray-700 dark:border-gray-600"
+            autoFocus
+          />
+          <button type="submit" className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md">
+            <Check className="w-4 h-4 text-green-500" />
+          </button>
+          <button
+            onClick={() => {
+              setEditingName(null);
+              setEditingType(null);
+              setNewName('');
+            }}
+            className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md"
+          >
+            <X className="w-4 h-4 text-red-500" />
+          </button>
+        </form>
+      ) : (
+        <div
+          className={`flex items-center justify-between space-x-2 min-w-0 ${
+            activeApiId === api.id
+              ? 'bg-blue-100 dark:bg-blue-800 pl-1 pr-1 rounded-lg'
+              : 'hover:bg-gray-100 dark:hover:bg-gray-800 pl-1 pr-1 rounded-lg'
+          }`}
+          onClick={() => {
+            openNewTab(folder.id, api);
+            setIsSidebarOpen(false);
+            setIsPerformanceTesting(false);
+          }}
+        >
+          <div className="flex items-center space-x-2 flex-1 min-w-0">
+            <span className={`flex-shrink-0 px-2 py-0.5 rounded-md text-xs font-semibold tracking-wide ${
+              {
+                GET: 'bg-green-100 dark:bg-green-800 text-green-700 dark:text-green-300',
+                POST: 'bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-300',
+                PUT: 'bg-yellow-100 dark:bg-yellow-800 text-yellow-700 dark:text-yellow-300',
+                DELETE: 'bg-red-100 dark:bg-red-800 text-red-700 dark:text-red-300',
+                PATCH: 'bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300',
+              }[api.method]
+            }`}>
+              {api.method}
+            </span>
+            <span className="truncate text-sm text-gray-700 dark:text-gray-300">
+              {api.name}
+            </span>
+          </div>
+          <CustomDropdown trigger={<MoreVertical className="w-4 h-4 text-gray-500 dark:text-gray-400" />}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingName(api.id);
+                setEditingType('api');
+                setNewName(api.name);
+              }}
+              className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center space-x-2"
+            >
+              <Pencil className="w-4 h-4" />
+              <span>Rename</span>
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDelete(folder.id, api.id);
+              }}
+              className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center space-x-2 text-red-600"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Delete</span>
+            </button>
+          </CustomDropdown>
+        </div>
+      )}
+    </div>
+  );
+};
 
 
-  const  renderSidebarContent = () => {
+
+  const renderSidebarContent = () => {
     switch (activeSection) {
       case 'collections':
         return (
           <div className="flex-1">
             {collections.map((folder) => (
               <div key={folder.id} className="p-2">
+                {editingName === folder.id && editingType === 'collection' ? (
+                  <form 
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleRename(folder.id, 'collection', newName);
+                    }}
+                    className="flex items-center space-x-2 p-2"
+                  >
+                    <input
+                      type="text"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      className="flex-1 px-2 py-1 border rounded dark:bg-gray-700 dark:border-gray-600"
+                      autoFocus
+                    />
+                    <button
+                      type="submit"
+                      className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md"
+                    >
+                      <Check className="w-4 h-4 text-green-500" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditingName(null);
+                        setEditingType(null);
+                        setNewName('');
+                      }}
+                      className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md"
+                    >
+                      <X className="w-4 h-4 text-red-500" />
+                    </button>
+                  </form>
+                ) : (
                 <div className="flex items-center justify-between p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors duration-150 cursor-pointer group">
                   <div 
                     className="flex items-center space-x-2 flex-1 min-w-0"
@@ -223,68 +439,12 @@ const FooterButton = ({ icon: Icon, label, onClick }) => (
                 </CustomDropdown>
                   </div>
                 </div>
-                
-                {folder.apis.map((api) => (
-              <div key={api.id} className="relative ml-2 p-2 rounded-lg cursor-pointer group">
-                <div
-                  className={`flex items-center justify-between space-x-2 min-w-0 ${
-                    activeApiId === api.id
-                      ? 'bg-blue-100 dark:bg-blue-800 pl-1 pr-1 rounded-lg'
-                      : 'hover:bg-gray-100 dark:hover:bg-gray-800 pl-1 pr-1 rounded-lg'
-                  }`}
-                  onClick={() => {
-                    openNewTab(folder.id, api);
-                    setIsSidebarOpen(false);
-                    setIsPerformanceTesting(false);
-                  }}
-                >
-                  <div className="flex items-center space-x-2 flex-1 min-w-0">
-                    <span className={`flex-shrink-0 px-2 py-0.5 rounded-md text-xs font-semibold tracking-wide ${
-                      {
-                        GET: 'bg-green-100 dark:bg-green-800 text-green-700 dark:text-green-300',
-                        POST: 'bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-300',
-                        PUT: 'bg-yellow-100 dark:bg-yellow-800 text-yellow-700 dark:text-yellow-300',
-                        DELETE: 'bg-red-100 dark:bg-red-800 text-red-700 dark:text-red-300',
-                        PATCH: 'bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300',
-                      }[api.method]
-                    }`}>
-                      {api.method}
-                    </span>
-                    <span className="truncate text-sm text-gray-700 dark:text-gray-300">
-                      {api.name}
-                    </span>
-                  </div>
-                  <CustomDropdown trigger={<MoreVertical className="w-4 h-4 text-gray-500 dark:text-gray-400" />}>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingName(api.id);
-                        setEditingType('api');
-                        setNewName(api.name);
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center space-x-2"
-                    >
-                      <Pencil className="w-4 h-4" />
-                      <span>Rename</span>
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(folder.id, api.id);
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center space-x-2 text-red-600"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      <span>Delete</span>
-                    </button>
-                  </CustomDropdown>
-                </div>
-              </div>
-            ))}
-              </div>
-            ))}
-          </div>
-        );       
+              )}
+               {folder.apis.map((api) => renderApiItem(folder, api))}
+            </div>
+          ))}
+        </div>
+      );
       
       case 'environments':
         return (
@@ -366,9 +526,6 @@ const FooterButton = ({ icon: Icon, label, onClick }) => (
     ));
   };
   
-
-  
-
   useEffect(() => {
     setOpenTabs(prevTabs => 
       prevTabs.map(tab => {
@@ -734,15 +891,31 @@ const FooterButton = ({ icon: Icon, label, onClick }) => (
               folderName: collections.find(f => f.id === activeFolderId)?.name || 'Unnamed Folder',
               requestDetails: {
                 headers: api.headers,
-                body: processedBody, // Use the processed body here too
                 queryParams: api.queryParams,
+                body: {
+                  type: api.body.type,
+                  content: api.body.content,
+                  formData: api.body.formData,
+                  urlencoded: api.body.urlencoded
+                },
                 auth: api.auth
               },
               responseDetails: {
-                headers: Object.fromEntries(response.headers),
-                body: responseData
+                headers: Array.from(response.headers.entries()).map(([key, value]) => ({ key, value })),
+                body: responseData,
+                cookies: response.headers.get('set-cookie')?.split(',').map(cookie => {
+                  const [name, ...parts] = cookie.split(';');
+                  const [, value] = name.split('=');
+                  return { name, value, raw: cookie };
+                }) || []
               },
-              errorContext: null
+              settings: api.settings,
+              scripts: {
+                preRequest: api.scripts?.preRequest,
+                tests: api.scripts?.tests,
+                testResults: [] // Add test results if you implement test running
+              },
+              environmentVariables: [] // Add environment variables if you use them
             };
       
             if (!response.ok) {
@@ -1504,13 +1677,14 @@ const ResponsePanel = ({ api }) => {
 };
 
 
-      const methodColors = {
-        GET: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
-        POST: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-        PUT: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
-        DELETE: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-        PATCH: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300'
-      };
+const methodColors = {
+  GET: 'text-emerald-700 dark:text-emerald-300',
+  POST: 'text-blue-700 dark:text-blue-300',
+  PUT: 'text-amber-700 dark:text-amber-300',
+  DELETE: 'text-red-700 dark:text-red-300',
+  PATCH: 'text-purple-700 dark:text-purple-300'
+};
+
     
       const renderRequestPanel = () => {
         const api = getActiveApi();
@@ -1714,28 +1888,60 @@ const ResponsePanel = ({ api }) => {
             });
           }
         };
+        const buildUrlWithParams = (baseUrl, params) => {
+          if (!params.length || !params[0].key) return baseUrl;
+          
+          const urlObj = new URL(baseUrl.startsWith('http') ? baseUrl : `http://${baseUrl}`);
+          params.forEach(param => {
+            if (param.key && param.value) {
+              urlObj.searchParams.set(param.key, param.value);
+            }
+          });
+          
+          return urlObj.toString().replace(/^http:\/\//, '');
+        };
+      
+        // Handler for URL input changes
+        const handleUrlChange = (e) => {
+          const newUrl = e.target.value;
+          const urlWithoutParams = newUrl.split('?')[0];
+          updateApiState(activeFolderId, activeApiId, { url: urlWithoutParams });
+        };
+      
+        // Handler for parameter changes
+        const handleParamChange = (index, field, value) => {
+          const newParams = [...api.queryParams];
+          newParams[index][field] = value;
+          
+          // Update both params and URL
+          const newUrl = buildUrlWithParams(api.url.split('?')[0], newParams);
+          updateApiState(activeFolderId, activeApiId, {
+            queryParams: newParams,
+            url: newUrl
+          });
+        };
         
    return (
     <div className="flex flex-col h-full bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
-
     <div className="flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-      <select 
+      <select
         value={api.method}
         onChange={(e) => updateApiState(activeFolderId, activeApiId, { method: e.target.value })}
-        className={`px-3 py-2 rounded-md font-medium text-sm focus:outline-none focus:ring-2 focus:ring-offset-2 ${methodColors[api.method]} border-0`}
+        className={`px-3 py-2 rounded-md font-medium text-sm focus:outline-none focus:ring-2 focus:ring-offset-2 bg-white dark:bg-gray-900 border border-gray-300  dark:border-gray-700`}
       >
-        <option>GET</option>
-        <option>POST</option>
-        <option>PUT</option>
-        <option>DELETE</option>
-        <option>PATCH</option>
+        <option className="text-emerald-700 dark:text-emerald-300" value="GET">GET</option>
+        <option className="text-blue-700 dark:text-blue-300" value="POST">POST</option>
+        <option className="text-amber-700 dark:text-amber-300" value="PUT">PUT</option>
+        <option className="text-red-700 dark:text-red-300" value="DELETE">DELETE</option>
+        <option className="text-purple-700 dark:text-purple-300" value="PATCH">PATCH</option>
       </select>
+
       
       <div className="flex-1 relative">
         <input
           type="text"
           value={api.url}
-          onChange={(e) => updateApiState(activeFolderId, activeApiId, { url: e.target.value })}
+          onChange={handleUrlChange}
           placeholder="Enter request URL"
           className="w-full px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent"
         />
@@ -1749,81 +1955,81 @@ const ResponsePanel = ({ api }) => {
         <span>Send</span>
       </button>
     </div>
+
     <div className="border-b border-gray-200 dark:border-gray-700">
-        <div className="flex">
+      <div className="flex">
         {[
-  { name: 'Params', icon: Database, hasContent: hasParams() },
-  { name: 'Authorization', icon: Lock, hasContent: hasAuth() },
-  { name: 'Headers', icon: Code, hasContent: hasHeaders() },
-  { name: 'Body', icon: CodeSquare, hasContent: hasBody() },
-  { name: 'Scripts', icon: Terminal, hasContent: hasScripts() },
-  { name: 'Settings', icon: Settings, hasContent: hasSettings() }
-].map(({ name, icon: Icon, hasContent }) => (
-  <button
-    key={name}
-    onClick={() => setActiveTab(name.toLowerCase())}
-    className={`relative flex items-center space-x-2 px-4 py-3 text-sm font-medium transition-colors duration-150 ease-in-out
-      ${activeTab === name.toLowerCase()
-        ? 'border-b-2 border-blue-500 text-blue-500 dark:text-blue-400'
-        : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
-      }`}
-  >
-    <Icon className="w-4 h-4" />
-    <span>{name}</span>
-    {hasContent && (
-      <span className="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full" />
-    )}
-  </button>
-))}
-        </div>
+          { name: 'Params', icon: Database, hasContent: hasParams() },
+          { name: 'Authorization', icon: Lock, hasContent: hasAuth() },
+          { name: 'Headers', icon: Code, hasContent: hasHeaders() },
+          { name: 'Body', icon: CodeSquare, hasContent: hasBody() },
+          { name: 'Scripts', icon: Terminal, hasContent: hasScripts() },
+          { name: 'Settings', icon: Settings, hasContent: hasSettings() }
+        ].map(({ name, icon: Icon, hasContent }) => (
+          <button
+            key={name}
+            onClick={() => setActiveTab(name.toLowerCase())}
+            className={`relative flex items-center space-x-2 px-4 py-3 text-sm font-medium transition-colors duration-150 ease-in-out
+              ${activeTab === name.toLowerCase()
+                ? 'border-b-2 border-blue-500 text-blue-500 dark:text-blue-400'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+              }`}
+          >
+            <Icon className="w-4 h-4" />
+            <span>{name}</span>
+            {hasContent && (
+              <span className="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full" />
+            )}
+          </button>
+        ))}
       </div>
+    </div>
 
     <div className="flex-1 overflow-auto p-4 bg-gray-50 dark:bg-gray-800">
-      {activeTab === 'params' && (
-        <div className="space-y-3">
-          {api.queryParams.map((param, index) => (
-            <div key={index} className="flex space-x-2">
-              <input
-                type="text"
-                placeholder="Key"
-                value={param.key}
-                onChange={(e) => {
-                  const newParams = [...api.queryParams];
-                  newParams[index].key = e.target.value;
-                  updateApiState(activeFolderId, activeApiId, { queryParams: newParams });
-                }}
-                className="flex-1 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent"
-              />
-              <input
-                type="text"
-                placeholder="Value"
-                value={param.value}
-                onChange={(e) => {
-                  const newParams = [...api.queryParams];
-                  newParams[index].value = e.target.value;
-                  updateApiState(activeFolderId, activeApiId, { queryParams: newParams });
-                }}
-                className="flex-1 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent"
-              />
-              <button
-                onClick={() => {
-                  const newParams = api.queryParams.filter((_, i) => i !== index);
-                  updateApiState(activeFolderId, activeApiId, { queryParams: newParams });
-                }}
-                className="p-2 text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400 transition-colors duration-150"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          ))}
-          <button
-            onClick={() => updateApiState(activeFolderId, activeApiId, {
-              queryParams: [...api.queryParams, { key: '', value: '' }]
-            })}
-            className="flex items-center space-x-2 text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm transition-colors duration-150"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Parameter</span>
+        {activeTab === 'params' && (
+          <div className="space-y-3">
+            {api.queryParams.map((param, index) => (
+              <div key={index} className="flex space-x-2">
+                <input
+                  type="text"
+                  placeholder="Key"
+                  value={param.key}
+                  onChange={(e) => handleParamChange(index, 'key', e.target.value)}
+                  className="flex-1 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent"
+                />
+                <input
+                  type="text"
+                  placeholder="Value"
+                  value={param.value}
+                  onChange={(e) => handleParamChange(index, 'value', e.target.value)}
+                  className="flex-1 px-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent"
+                />
+                <button
+                  onClick={() => {
+                    const newParams = api.queryParams.filter((_, i) => i !== index);
+                    const newUrl = buildUrlWithParams(api.url.split('?')[0], newParams);
+                    updateApiState(activeFolderId, activeApiId, {
+                      queryParams: newParams,
+                      url: newUrl
+                    });
+                  }}
+                  className="p-2 text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400 transition-colors duration-150"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={() => {
+                const newParams = [...api.queryParams, { key: '', value: '' }];
+                updateApiState(activeFolderId, activeApiId, {
+                  queryParams: newParams
+                });
+              }}
+              className="flex items-center space-x-2 text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 font-medium text-sm transition-colors duration-150"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Parameter</span>
           </button>
         </div>
       )}
@@ -2420,10 +2626,9 @@ return (
     activeApiId={activeApiId}
     createNewApi={createNewApi}
     openNewTab={openNewTab}
-    handleDelete={handleDelete}
   />
-
-      
+  
+  
       <div className="flex-1 flex overflow-hidden">
      
         {isMobile ? (
@@ -2530,10 +2735,10 @@ return (
       onClose={() => setActiveSection(null)}
     />
   ) : activeSection === 'history' ? (
-    <RequestHistoryPanel 
-      collections={collections}
-      className="w-full"
-    />
+  <RequestHistoryPanel 
+    collections={collections}
+    openRequestInTab={openRequestInTab}
+  />
   ) : activeFolderId && activeApiId ? (
     isPerformanceTesting ? (
       <PerformanceTestingPanel
